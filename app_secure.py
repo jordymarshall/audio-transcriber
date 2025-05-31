@@ -8,12 +8,31 @@ from openai import OpenAI
 import time
 import uuid
 from werkzeug.utils import secure_filename
+import stripe
+import json
+import hashlib
+from datetime import datetime, timedelta
 
 app = Flask(__name__, static_folder='frontend/build', static_url_path='')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
+app.config['USAGE_FILE'] = 'usage_tracking.json'
+
+# Stripe configuration
+stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+STRIPE_PUBLISHABLE_KEY = os.getenv('STRIPE_PUBLISHABLE_KEY')
+
+# Validate Stripe keys are set
+if not stripe.api_key or not STRIPE_PUBLISHABLE_KEY:
+    print("⚠️  WARNING: Stripe keys not found in environment variables!")
+    print("Please create a .env file with STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY")
+    print("See STRIPE_SETUP.md for instructions")
+
+# Pricing configuration
+MONTHLY_PRICE = 1.99  # $1.99 per month
+STRIPE_PRICE_ID = 'price_1234567890'  # Will be created in Stripe dashboard
 
 # Create directories
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -27,6 +46,71 @@ client_instances = {}
 MAX_WORKERS = 20  # Increased from 10 for more parallelization
 OPTIMAL_CHUNK_MINUTES = 5  # Smaller chunks for better parallelization
 SKIP_COMPRESSION_THRESHOLD_MB = 25  # Skip compression for files under 25MB
+
+def get_user_identifier(request):
+    """Generate a unique identifier for the user based on IP and User-Agent"""
+    user_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', ''))
+    user_agent = request.environ.get('HTTP_USER_AGENT', '')
+    identifier = f"{user_ip}:{user_agent}"
+    return hashlib.sha256(identifier.encode()).hexdigest()
+
+def load_usage_data():
+    """Load usage tracking data from file"""
+    try:
+        if os.path.exists(app.config['USAGE_FILE']):
+            with open(app.config['USAGE_FILE'], 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def save_usage_data(data):
+    """Save usage tracking data to file"""
+    try:
+        with open(app.config['USAGE_FILE'], 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Error saving usage data: {e}")
+
+def check_user_subscription(user_id):
+    """Check if user has an active subscription"""
+    usage_data = load_usage_data()
+    user_data = usage_data.get(user_id, {})
+    
+    subscription_end = user_data.get('subscription_end')
+    if subscription_end:
+        subscription_end_date = datetime.fromisoformat(subscription_end)
+        if datetime.now() < subscription_end_date:
+            return True, subscription_end_date
+    
+    return False, None
+
+def activate_user_subscription(user_id, subscription_id):
+    """Activate a monthly subscription for user"""
+    usage_data = load_usage_data()
+    if user_id not in usage_data:
+        usage_data[user_id] = {'first_use': datetime.now().isoformat()}
+    
+    # Set subscription to end in 30 days
+    subscription_end = datetime.now() + timedelta(days=30)
+    usage_data[user_id]['subscription_id'] = subscription_id
+    usage_data[user_id]['subscription_start'] = datetime.now().isoformat()
+    usage_data[user_id]['subscription_end'] = subscription_end.isoformat()
+    usage_data[user_id]['last_payment'] = datetime.now().isoformat()
+    
+    save_usage_data(usage_data)
+    return subscription_end
+
+def increment_user_usage(user_id):
+    """Increment user's usage count (for analytics)"""
+    usage_data = load_usage_data()
+    if user_id not in usage_data:
+        usage_data[user_id] = {'usage_count': 0, 'first_use': datetime.now().isoformat()}
+    
+    usage_data[user_id]['usage_count'] = usage_data[user_id].get('usage_count', 0) + 1
+    usage_data[user_id]['last_use'] = datetime.now().isoformat()
+    save_usage_data(usage_data)
+    return usage_data[user_id]['usage_count']
 
 def get_openai_client(api_key):
     """Get or create OpenAI client for the given API key"""
@@ -312,6 +396,48 @@ def api_info():
         'note': 'API key must be provided with each upload request'
     })
 
+@app.route('/api/config')
+def get_stripe_config():
+    """Get Stripe publishable key for frontend"""
+    return jsonify({
+        'publishable_key': STRIPE_PUBLISHABLE_KEY
+    })
+
+@app.route('/api/create-payment-intent', methods=['POST'])
+def create_payment_intent():
+    """Create a Stripe payment intent for monthly subscription ($1.99)"""
+    try:
+        # Create a one-time payment that represents monthly subscription
+        intent = stripe.PaymentIntent.create(
+            amount=199,  # $1.99 in cents
+            currency='usd',
+            metadata={
+                'service': 'audio_transcription_monthly',
+                'user_id': get_user_identifier(request),
+                'subscription_type': 'monthly'
+            }
+        )
+        
+        return jsonify({
+            'client_secret': intent.client_secret
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/check-usage', methods=['GET'])
+def check_usage():
+    """Check if user has active subscription"""
+    user_id = get_user_identifier(request)
+    subscription_active, subscription_end = check_user_subscription(user_id)
+    
+    return jsonify({
+        'subscription_active': subscription_active,
+        'subscription_end': subscription_end.isoformat() if subscription_end else None,
+        'needs_payment': not subscription_active,
+        'price': MONTHLY_PRICE,
+        'billing_type': 'monthly'
+    })
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     # Check for API key
@@ -322,6 +448,29 @@ def upload_file():
     if not api_key.startswith('sk-'):
         return jsonify({'error': 'Invalid API key format'}), 400
     
+    # Check user subscription
+    user_id = get_user_identifier(request)
+    subscription_active, subscription_end = check_user_subscription(user_id)
+    
+    # If not subscribed, check for payment
+    if not subscription_active:
+        payment_intent_id = request.form.get('payment_intent_id')
+        if not payment_intent_id:
+            return jsonify({'error': 'Monthly subscription required ($1.99/month for unlimited transcriptions)'}), 402
+        
+        # Verify payment was successful and activate subscription
+        try:
+            payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            if payment_intent.status != 'succeeded':
+                return jsonify({'error': 'Payment not completed'}), 402
+            
+            # Activate subscription for 30 days
+            subscription_end = activate_user_subscription(user_id, payment_intent_id)
+            subscription_active = True
+            
+        except Exception as e:
+            return jsonify({'error': 'Invalid payment'}), 402
+    
     if 'file' not in request.files:
         return jsonify({'error': 'No file selected'}), 400
     
@@ -330,6 +479,9 @@ def upload_file():
         return jsonify({'error': 'No file selected'}), 400
     
     if file:
+        # Increment usage count for analytics
+        usage_count = increment_user_usage(user_id)
+        
         job_id = str(uuid.uuid4())
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], f"{job_id}_{filename}")
@@ -339,7 +491,10 @@ def upload_file():
         transcription_jobs[job_id] = {
             'status': 'uploaded',
             'progress': 0,
-            'filename': filename
+            'filename': filename,
+            'user_id': user_id,
+            'usage_count': usage_count,
+            'subscription_active': subscription_active
         }
         
         # Start optimized transcription in background with API key
@@ -348,7 +503,12 @@ def upload_file():
         thread.daemon = True
         thread.start()
         
-        return jsonify({'job_id': job_id})
+        return jsonify({
+            'job_id': job_id,
+            'usage_count': usage_count,
+            'subscription_active': subscription_active,
+            'subscription_end': subscription_end.isoformat() if subscription_end else None
+        })
 
 @app.route('/status/<job_id>')
 def get_status(job_id):

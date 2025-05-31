@@ -3,29 +3,25 @@ import axios from 'axios';
 import { TranscriptionJob } from '../types';
 
 interface ProgressTrackerProps {
-  jobId: string;
-  filename: string;
-  onComplete: (jobId: string) => void;
-  onReset: () => void;
+  job: TranscriptionJob;
+  onComplete: () => void;
 }
 
 const ProgressTracker: React.FC<ProgressTrackerProps> = ({ 
-  jobId, 
-  filename, 
-  onComplete, 
-  onReset 
+  job: initialJob, 
+  onComplete 
 }) => {
-  const [job, setJob] = useState<TranscriptionJob | null>(null);
+  const [job, setJob] = useState<TranscriptionJob>(initialJob);
   const [error, setError] = useState<string>('');
 
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const response = await axios.get<TranscriptionJob>(`/status/${jobId}`);
+        const response = await axios.get<TranscriptionJob>(`/status/${job.job_id}`);
         setJob(response.data);
         
         if (response.data.status === 'completed') {
-          onComplete(jobId);
+          onComplete();
         } else if (response.data.status === 'error') {
           setError(response.data.message || 'An error occurred during transcription');
         }
@@ -41,7 +37,7 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({
     const interval = setInterval(checkStatus, 2000);
 
     return () => clearInterval(interval);
-  }, [jobId, onComplete]);
+  }, [job.job_id, onComplete]);
 
   const getStatusText = () => {
     if (!job) return 'Initializing...';
@@ -87,14 +83,14 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({
 
   const downloadTranscription = async () => {
     try {
-      const response = await axios.get(`/download/${jobId}`, {
+      const response = await axios.get(`/download/${job.job_id}`, {
         responseType: 'blob',
       });
 
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `transcription_${filename}.txt`);
+      link.setAttribute('download', `transcription_${job.filename}.txt`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -116,7 +112,7 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({
           </h3>
           <p className="text-gray-600 mb-6">{error}</p>
           <button
-            onClick={onReset}
+            onClick={onComplete}
             className="bg-primary-500 hover:bg-primary-600 text-white px-6 py-2 rounded-lg transition-colors"
           >
             Try Again
@@ -133,7 +129,7 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({
           <span className="text-2xl">{getStatusIcon()}</span>
         </div>
         <h3 className="text-lg font-semibold text-gray-900 mb-2">
-          Processing: {filename}
+          Processing: {job.filename}
         </h3>
         <p className="text-gray-600">{getStatusText()}</p>
       </div>
@@ -187,7 +183,7 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({
               <span>Download Transcription</span>
             </button>
             <button
-              onClick={onReset}
+              onClick={onComplete}
               className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-2 rounded-lg transition-colors"
             >
               Process Another File
@@ -195,7 +191,7 @@ const ProgressTracker: React.FC<ProgressTrackerProps> = ({
           </>
         ) : (
           <button
-            onClick={onReset}
+            onClick={onComplete}
             className="bg-gray-300 hover:bg-gray-400 text-gray-700 px-6 py-2 rounded-lg transition-colors"
             disabled={job?.status === 'transcribing'}
           >

@@ -1,0 +1,44 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Node modules (will be installed fresh)
+node_modules/
+frontend/node_modules/
+
+# Build output (will be created during build)
+frontend/build/
+
+# Uploads and outputs
+uploads/
+outputs/
+
+# Temp files
+*.tmp
+*.log
+temp_*
+chunk_*
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation
+*.md
+
+# OS
+.DS_Store
+
+# Other Python files not needed
+Transcribe.py
+app.py 

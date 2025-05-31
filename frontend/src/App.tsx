@@ -1,53 +1,68 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { Elements } from '@stripe/react-stripe-js';
+import { loadStripe } from '@stripe/stripe-js';
+import axios from 'axios';
 import FileUpload from './components/FileUpload';
 import ProgressTracker from './components/ProgressTracker';
+import { TranscriptionJob } from './types';
 import './index.css';
 
-interface AppState {
-  currentJob: {
-    jobId: string;
-    filename: string;
-  } | null;
-}
+function App() {
+  const [currentJob, setCurrentJob] = useState<TranscriptionJob | null>(null);
+  const [stripePromise, setStripePromise] = useState<any>(null);
 
-const App: React.FC = () => {
-  const [appState, setAppState] = useState<AppState>({
-    currentJob: null
-  });
+  useEffect(() => {
+    // Load Stripe configuration
+    const loadStripeConfig = async () => {
+      try {
+        const response = await axios.get('/api/config');
+        const stripe = await loadStripe(response.data.publishable_key);
+        setStripePromise(stripe);
+      } catch (error) {
+        console.error('Failed to load Stripe configuration:', error);
+      }
+    };
+
+    loadStripeConfig();
+  }, []);
 
   const handleJobStart = (jobId: string, filename: string) => {
-    setAppState({
-      currentJob: { jobId, filename }
+    setCurrentJob({
+      job_id: jobId,
+      filename,
+      status: 'uploaded',
+      progress: 0,
     });
   };
 
-  const handleJobComplete = (jobId: string) => {
-    // Keep the job state to show download button
-    console.log(`Job ${jobId} completed`);
+  const handleJobComplete = () => {
+    setCurrentJob(null);
   };
 
-  const handleReset = () => {
-    setAppState({
-      currentJob: null
-    });
-  };
+  if (!stripePromise) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading payment system...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <div className="container mx-auto">
-        {appState.currentJob ? (
-          <ProgressTracker
-            jobId={appState.currentJob.jobId}
-            filename={appState.currentJob.filename}
-            onComplete={handleJobComplete}
-            onReset={handleReset}
-          />
-        ) : (
-          <FileUpload onJobStart={handleJobStart} />
-        )}
+    <Elements stripe={stripePromise}>
+      <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto">
+          {!currentJob ? (
+            <FileUpload onJobStart={handleJobStart} />
+          ) : (
+            <ProgressTracker job={currentJob} onComplete={handleJobComplete} />
+          )}
+        </div>
       </div>
-    </div>
+    </Elements>
   );
-};
+}
 
 export default App; 

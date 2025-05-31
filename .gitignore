@@ -3,6 +3,12 @@
 .env.local
 .env.production
 
+# Setup scripts (contains instructions for keys)
+setup_stripe.py
+
+# Usage tracking (contains user data)
+usage_tracking.json
+
 # Python
 __pycache__/
 *.py[cod]
