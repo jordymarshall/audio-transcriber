@@ -15,10 +15,16 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__, static_folder='frontend/build', static_url_path='')
 CORS(app)
-app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max file size
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
 app.config['USAGE_FILE'] = 'usage_tracking.json'
+
+# OpenAI configuration - Use developer's API key
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    print("⚠️  WARNING: OpenAI API key not found in environment variables!")
+    print("Please add OPENAI_API_KEY to your .env file")
 
 # Stripe configuration
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
@@ -38,9 +44,14 @@ STRIPE_PRICE_ID = 'price_1234567890'  # Will be created in Stripe dashboard
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-# Store transcription status and client instances
+# Store transcription status
 transcription_jobs = {}
-client_instances = {}
+
+# Initialize OpenAI client with developer's API key
+if OPENAI_API_KEY:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    openai_client = None
 
 # OPTIMIZATION SETTINGS
 MAX_WORKERS = 20  # Increased from 10 for more parallelization
@@ -112,12 +123,6 @@ def increment_user_usage(user_id):
     save_usage_data(usage_data)
     return usage_data[user_id]['usage_count']
 
-def get_openai_client(api_key):
-    """Get or create OpenAI client for the given API key"""
-    if api_key not in client_instances:
-        client_instances[api_key] = OpenAI(api_key=api_key)
-    return client_instances[api_key]
-
 def get_optimal_strategy(file_path):
     """Determine the optimal processing strategy based on file size"""
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -167,11 +172,15 @@ def transcribe_file_direct(file_path, api_key):
     """Directly transcribe a file without chunking (for small files)"""
     try:
         print(f"⚡ Direct transcription (file under {SKIP_COMPRESSION_THRESHOLD_MB}MB)")
-        client = get_openai_client(api_key)
+        
+        # Use global client instead of per-API-key client
+        if not openai_client:
+            print("❌ OpenAI client not initialized")
+            return "[ERROR: OpenAI client not initialized]"
         
         with open(file_path, "rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model="gpt-4o-transcribe",
+            transcription = openai_client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
                 file=audio_file,
                 response_format="text"
             )
@@ -231,11 +240,14 @@ def chunk_audio_parallel(input_path, chunk_duration_minutes):
 def transcribe_file(file_path, api_key):
     """Transcribe a single audio file"""
     try:
-        client = get_openai_client(api_key)
+        # Use global client instead of per-API-key client
+        if not openai_client:
+            print("❌ OpenAI client not initialized")
+            return "[ERROR: OpenAI client not initialized]"
         
         with open(file_path, "rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model="gpt-4o-transcribe",
+            transcription = openai_client.audio.transcriptions.create(
+                model="gpt-4o-mini-transcribe",
                 file=audio_file,
                 response_format="text",
                 language="en"  # Specify language for faster processing
@@ -245,19 +257,15 @@ def transcribe_file(file_path, api_key):
         print(f"❌ Error transcribing {file_path}: {e}")
         return f"[ERROR: Could not transcribe {file_path} - {str(e)}]"
 
-def process_transcription_optimized(job_id, audio_file_path, api_key):
+def process_transcription_optimized(job_id, audio_file_path):
     """Process transcription with optimal strategy based on file size"""
     try:
         start_time = time.time()
         
-        # Validate API key early
-        try:
-            client = get_openai_client(api_key)
-            # Test the API key with a simple request
-            client.models.list()
-        except Exception as e:
+        # Check if OpenAI client is initialized
+        if not openai_client:
             transcription_jobs[job_id]['status'] = 'error'
-            transcription_jobs[job_id]['message'] = f'Invalid API key: {str(e)}'
+            transcription_jobs[job_id]['message'] = 'OpenAI API key not configured'
             return
         
         # Determine optimal strategy
@@ -270,7 +278,7 @@ def process_transcription_optimized(job_id, audio_file_path, api_key):
             transcription_jobs[job_id]['progress'] = 50
             transcription_jobs[job_id]['message'] = f'Direct transcription ({file_size_mb:.1f}MB file)'
             
-            full_transcription = transcribe_file_direct(audio_file_path, api_key)
+            full_transcription = transcribe_file_direct(audio_file_path, None)
             
         else:
             # Larger files: Compress and chunk
@@ -313,7 +321,7 @@ def process_transcription_optimized(job_id, audio_file_path, api_key):
                 
                 # Submit all chunks at once
                 for chunk_index, chunk_file in chunks:
-                    future = executor.submit(transcribe_file, chunk_file, api_key)
+                    future = executor.submit(transcribe_file, chunk_file, None)
                     futures[future] = (chunk_index, chunk_file)
                 
                 completed = 0
@@ -440,13 +448,9 @@ def check_usage():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    # Check for API key
-    api_key = request.form.get('api_key')
-    if not api_key:
-        return jsonify({'error': 'API key is required'}), 400
-    
-    if not api_key.startswith('sk-'):
-        return jsonify({'error': 'Invalid API key format'}), 400
+    # Check if OpenAI is configured
+    if not openai_client:
+        return jsonify({'error': 'Service temporarily unavailable - OpenAI not configured'}), 503
     
     # Check user subscription
     user_id = get_user_identifier(request)
@@ -497,9 +501,9 @@ def upload_file():
             'subscription_active': subscription_active
         }
         
-        # Start optimized transcription in background with API key
+        # Start optimized transcription in background
         from threading import Thread
-        thread = Thread(target=process_transcription_optimized, args=(job_id, filepath, api_key))
+        thread = Thread(target=process_transcription_optimized, args=(job_id, filepath))
         thread.daemon = True
         thread.start()
         
