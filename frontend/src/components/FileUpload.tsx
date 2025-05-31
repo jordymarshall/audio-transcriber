@@ -1,34 +1,23 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import axios from 'axios';
-import { TranscriptionJob, UploadResponse, UsageResponse } from '../types';
+import { TranscriptionJob, UploadResponse, User } from '../types';
 import PaymentForm from './PaymentForm';
 
 interface FileUploadProps {
+  user: User;
   onJobStart: (jobId: string, filename: string) => void;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onJobStart }) => {
+const FileUpload: React.FC<FileUploadProps> = ({ user, onJobStart }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
-  const [usageInfo, setUsageInfo] = useState<UsageResponse | null>(null);
   const [paymentIntentId, setPaymentIntentId] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    // Check user usage on component mount
-    checkUsage();
-  }, []);
-
-  const checkUsage = async () => {
-    try {
-      const response = await axios.get<UsageResponse>('/api/check-usage');
-      setUsageInfo(response.data);
-    } catch (error) {
-      console.error('Failed to check usage:', error);
-    }
-  };
+  const canTranscribeForFree = !user.has_used_free_transcription;
+  const needsSubscription = !user.subscription_active && user.has_used_free_transcription;
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -74,7 +63,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onJobStart }) => {
     }
 
     // Check if payment is needed
-    if (usageInfo && usageInfo.needs_payment && !paymentIntentId) {
+    if (needsSubscription && !paymentIntentId) {
       setPendingFile(file);
       setShowPayment(true);
       return;
@@ -98,6 +87,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onJobStart }) => {
       const response = await axios.post<UploadResponse>('/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
+          'X-User-ID': user.id,
         },
       });
 
@@ -106,9 +96,6 @@ const FileUpload: React.FC<FileUploadProps> = ({ onJobStart }) => {
       // Reset payment state
       setPaymentIntentId(null);
       setPendingFile(null);
-      
-      // Update usage info
-      await checkUsage();
       
     } catch (error: any) {
       console.error('Upload failed:', error);
@@ -144,48 +131,56 @@ const FileUpload: React.FC<FileUploadProps> = ({ onJobStart }) => {
     fileInputRef.current?.click();
   };
 
+  const getStatusMessage = () => {
+    if (canTranscribeForFree) {
+      return {
+        title: "🎁 Your First Transcription is FREE!",
+        subtitle: "Upload your audio file and try our service completely free",
+        bgColor: "bg-gradient-to-r from-green-50 to-blue-50",
+        borderColor: "border-green-200"
+      };
+    } else if (user.subscription_active) {
+      const endDate = user.subscription_end ? new Date(user.subscription_end).toLocaleDateString() : 'unknown';
+      return {
+        title: "✅ Subscription Active",
+        subtitle: `Unlimited transcriptions until ${endDate}`,
+        bgColor: "bg-gradient-to-r from-green-50 to-emerald-50",
+        borderColor: "border-green-200"
+      };
+    } else {
+      return {
+        title: "💳 Subscription Required",
+        subtitle: "Subscribe for $1.99/month for unlimited transcriptions",
+        bgColor: "bg-gradient-to-r from-amber-50 to-orange-50",
+        borderColor: "border-amber-200"
+      };
+    }
+  };
+
+  const statusMessage = getStatusMessage();
+
   return (
     <>
       <div className="card max-w-2xl mx-auto">
         <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            🎵 Audio Transcriber
+            🎵 Upload Audio File
           </h1>
           <p className="text-gray-600">
-            Upload an audio file to transcribe using advanced AI
+            Transform your audio into text with advanced AI transcription
           </p>
-          
-          {/* Usage Information */}
-          {usageInfo && (
-            <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-              {usageInfo.subscription_active ? (
-                <p className="text-sm text-blue-800">
-                  ✅ <strong>Subscription Active!</strong> You have unlimited transcriptions until {' '}
-                  {usageInfo.subscription_end ? new Date(usageInfo.subscription_end).toLocaleDateString() : 'renewal'}.
-                </p>
-              ) : (
-                <p className="text-sm text-blue-800">
-                  🎯 <strong>Subscribe for ${usageInfo.price.toFixed(2)}/month</strong> and get unlimited transcriptions! 
-                  No API key needed - we handle everything for you.
-                </p>
-              )}
-            </div>
-          )}
-          
-          {/* LinkedIn Follow Section */}
-          <div className="mt-4 flex items-center justify-center space-x-2">
-            <span className="text-sm text-gray-500">Follow me on</span>
-            <a 
-              href="https://www.linkedin.com/in/jordanmarshalluwo/" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="inline-flex items-center space-x-1 text-blue-600 hover:text-blue-800 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-              </svg>
-              <span className="font-medium">LinkedIn</span>
-            </a>
+        </div>
+
+        {/* User Status */}
+        <div className={`${statusMessage.bgColor} border ${statusMessage.borderColor} rounded-lg p-4 mb-6`}>
+          <div className="text-center">
+            <h3 className="font-semibold text-gray-800 mb-1">{statusMessage.title}</h3>
+            <p className="text-sm text-gray-700">{statusMessage.subtitle}</p>
+            {canTranscribeForFree && (
+              <div className="mt-2 text-xs text-gray-600">
+                After your free transcription, subscribe for $1.99/month for unlimited access
+              </div>
+            )}
           </div>
         </div>
 
@@ -235,20 +230,21 @@ const FileUpload: React.FC<FileUploadProps> = ({ onJobStart }) => {
         <div className="mt-6 bg-gray-50 rounded-lg p-4">
           <h3 className="font-medium text-gray-900 mb-2">⚡ Features:</h3>
           <ul className="text-sm text-gray-600 space-y-1">
-            <li>• Advanced AI transcription using GPT-4o-mini model</li>
-            <li>• Maximum speed optimization with compression</li>
-            <li>• Adaptive chunking based on file size</li>
-            <li>• Parallel transcription for faster results</li>
-            <li>• Support for files up to 11+ hours</li>
+            <li>• Advanced AI transcription using GPT-4o-mini model (~$0.16/hour)</li>
+            <li>• Maximum speed optimization with parallel processing</li>
+            <li>• Support for files up to 500MB and 11+ hours long</li>
             <li>• Secure processing - files are deleted after transcription</li>
-            <li>• 💎 <strong>Monthly subscription:</strong> Unlimited transcriptions for $1.99/month</li>
+            <li>• Real-time progress tracking</li>
+            {canTranscribeForFree && (
+              <li>• 🎁 <strong>Your first transcription is completely FREE!</strong></li>
+            )}
           </ul>
         </div>
       </div>
 
-      {showPayment && usageInfo && (
+      {showPayment && (
         <PaymentForm
-          amount={usageInfo.price}
+          amount={1.99}
           onPaymentSuccess={handlePaymentSuccess}
           onCancel={handlePaymentCancel}
         />

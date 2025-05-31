@@ -12,19 +12,28 @@ import stripe
 import json
 import hashlib
 from datetime import datetime, timedelta
+import jwt
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 
 app = Flask(__name__, static_folder='frontend/build', static_url_path='')
 CORS(app)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'outputs'
-app.config['USAGE_FILE'] = 'usage_tracking.json'
+app.config['USERS_FILE'] = 'users.json'
 
 # OpenAI configuration - Use developer's API key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     print("⚠️  WARNING: OpenAI API key not found in environment variables!")
     print("Please add OPENAI_API_KEY to your .env file")
+
+# Google OAuth configuration
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+if not GOOGLE_CLIENT_ID:
+    print("⚠️  WARNING: Google Client ID not found in environment variables!")
+    print("Please add GOOGLE_CLIENT_ID to your .env file")
 
 # Stripe configuration
 stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
@@ -52,6 +61,126 @@ if OPENAI_API_KEY:
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
 else:
     openai_client = None
+
+# User management functions
+def load_users():
+    """Load user data from file"""
+    try:
+        if os.path.exists(app.config['USERS_FILE']):
+            with open(app.config['USERS_FILE'], 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def save_users(users_data):
+    """Save user data to file"""
+    try:
+        with open(app.config['USERS_FILE'], 'w') as f:
+            json.dump(users_data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving user data: {e}")
+
+def verify_google_token(token):
+    """Verify Google ID token and return user info"""
+    try:
+        idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
+        
+        if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
+            raise ValueError('Wrong issuer.')
+            
+        return {
+            'google_id': idinfo['sub'],
+            'email': idinfo['email'],
+            'name': idinfo['name'],
+            'picture': idinfo.get('picture', ''),
+            'verified_email': idinfo.get('email_verified', False)
+        }
+    except ValueError as e:
+        print(f"Invalid Google token: {e}")
+        return None
+
+def get_or_create_user(google_user_info):
+    """Get existing user or create new user from Google info"""
+    users = load_users()
+    google_id = google_user_info['google_id']
+    
+    if google_id in users:
+        # Update user info
+        users[google_id].update({
+            'name': google_user_info['name'],
+            'email': google_user_info['email'],
+            'picture': google_user_info['picture'],
+            'last_login': datetime.now().isoformat()
+        })
+    else:
+        # Create new user with free first transcription
+        users[google_id] = {
+            'google_id': google_id,
+            'name': google_user_info['name'],
+            'email': google_user_info['email'],
+            'picture': google_user_info['picture'],
+            'transcription_count': 0,
+            'subscription_active': False,
+            'subscription_end': None,
+            'subscription_id': None,
+            'created_at': datetime.now().isoformat(),
+            'last_login': datetime.now().isoformat(),
+            'has_used_free_transcription': False
+        }
+    
+    save_users(users)
+    return users[google_id]
+
+def check_user_subscription(user_id):
+    """Check if user has an active subscription or free transcription available"""
+    users = load_users()
+    user = users.get(user_id, {})
+    
+    # Check if user has active subscription
+    subscription_end = user.get('subscription_end')
+    if subscription_end:
+        subscription_end_date = datetime.fromisoformat(subscription_end)
+        if datetime.now() < subscription_end_date:
+            return True, subscription_end_date, 'subscription'
+    
+    # Check if user can use free first transcription
+    if not user.get('has_used_free_transcription', False):
+        return True, None, 'free'
+    
+    return False, None, None
+
+def activate_user_subscription(user_id, subscription_id):
+    """Activate a monthly subscription for user"""
+    users = load_users()
+    if user_id not in users:
+        return None
+    
+    # Set subscription to end in 30 days
+    subscription_end = datetime.now() + timedelta(days=30)
+    users[user_id]['subscription_id'] = subscription_id
+    users[user_id]['subscription_active'] = True
+    users[user_id]['subscription_start'] = datetime.now().isoformat()
+    users[user_id]['subscription_end'] = subscription_end.isoformat()
+    users[user_id]['last_payment'] = datetime.now().isoformat()
+    
+    save_users(users)
+    return subscription_end
+
+def increment_user_transcription_count(user_id, is_free=False):
+    """Increment user's transcription count"""
+    users = load_users()
+    if user_id not in users:
+        return 0
+    
+    users[user_id]['transcription_count'] = users[user_id].get('transcription_count', 0) + 1
+    users[user_id]['last_transcription'] = datetime.now().isoformat()
+    
+    if is_free:
+        users[user_id]['has_used_free_transcription'] = True
+    
+    save_users(users)
+    return users[user_id]['transcription_count']
 
 # OPTIMIZATION SETTINGS
 MAX_WORKERS = 20  # Increased from 10 for more parallelization
@@ -82,35 +211,6 @@ def save_usage_data(data):
             json.dump(data, f)
     except Exception as e:
         print(f"Error saving usage data: {e}")
-
-def check_user_subscription(user_id):
-    """Check if user has an active subscription"""
-    usage_data = load_usage_data()
-    user_data = usage_data.get(user_id, {})
-    
-    subscription_end = user_data.get('subscription_end')
-    if subscription_end:
-        subscription_end_date = datetime.fromisoformat(subscription_end)
-        if datetime.now() < subscription_end_date:
-            return True, subscription_end_date
-    
-    return False, None
-
-def activate_user_subscription(user_id, subscription_id):
-    """Activate a monthly subscription for user"""
-    usage_data = load_usage_data()
-    if user_id not in usage_data:
-        usage_data[user_id] = {'first_use': datetime.now().isoformat()}
-    
-    # Set subscription to end in 30 days
-    subscription_end = datetime.now() + timedelta(days=30)
-    usage_data[user_id]['subscription_id'] = subscription_id
-    usage_data[user_id]['subscription_start'] = datetime.now().isoformat()
-    usage_data[user_id]['subscription_end'] = subscription_end.isoformat()
-    usage_data[user_id]['last_payment'] = datetime.now().isoformat()
-    
-    save_usage_data(usage_data)
-    return subscription_end
 
 def increment_user_usage(user_id):
     """Increment user's usage count (for analytics)"""
@@ -406,9 +506,10 @@ def api_info():
 
 @app.route('/api/config')
 def get_stripe_config():
-    """Get Stripe publishable key for frontend"""
+    """Get Stripe publishable key and Google client ID for frontend"""
     return jsonify({
-        'publishable_key': STRIPE_PUBLISHABLE_KEY
+        'publishable_key': STRIPE_PUBLISHABLE_KEY,
+        'google_client_id': GOOGLE_CLIENT_ID
     })
 
 @app.route('/api/create-payment-intent', methods=['POST'])
@@ -436,15 +537,100 @@ def create_payment_intent():
 def check_usage():
     """Check if user has active subscription"""
     user_id = get_user_identifier(request)
-    subscription_active, subscription_end = check_user_subscription(user_id)
+    subscription_active, subscription_end, subscription_type = check_user_subscription(user_id)
     
     return jsonify({
         'subscription_active': subscription_active,
         'subscription_end': subscription_end.isoformat() if subscription_end else None,
+        'subscription_type': subscription_type,
         'needs_payment': not subscription_active,
         'price': MONTHLY_PRICE,
         'billing_type': 'monthly'
     })
+
+@app.route('/api/auth/google', methods=['POST'])
+def google_auth():
+    """Handle Google OAuth authentication"""
+    try:
+        data = request.get_json()
+        token = data.get('token')
+        
+        if not token:
+            return jsonify({'error': 'No token provided'}), 400
+        
+        # Verify Google token
+        google_user_info = verify_google_token(token)
+        if not google_user_info:
+            return jsonify({'error': 'Invalid Google token'}), 401
+        
+        # Get or create user
+        user = get_or_create_user(google_user_info)
+        
+        # Check subscription status
+        subscription_active, subscription_end, subscription_type = check_user_subscription(user['google_id'])
+        
+        return jsonify({
+            'success': True,
+            'user': {
+                'id': user['google_id'],
+                'name': user['name'],
+                'email': user['email'],
+                'picture': user['picture'],
+                'transcription_count': user['transcription_count'],
+                'subscription_active': subscription_active,
+                'subscription_end': subscription_end.isoformat() if subscription_end else None,
+                'subscription_type': subscription_type,
+                'has_used_free_transcription': user.get('has_used_free_transcription', False)
+            }
+        })
+        
+    except Exception as e:
+        print(f"Authentication error: {e}")
+        return jsonify({'error': 'Authentication failed'}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """Handle user logout"""
+    return jsonify({'success': True, 'message': 'Logged out successfully'})
+
+@app.route('/api/user/status', methods=['GET'])
+def get_user_status():
+    """Get current user status (requires authentication)"""
+    try:
+        # Get user ID from request headers (you'll need to implement proper token validation)
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({'error': 'No authorization header'}), 401
+            
+        # For now, we'll use a simple approach - in production, use proper JWT tokens
+        user_id = request.headers.get('X-User-ID')
+        if not user_id:
+            return jsonify({'error': 'User ID not provided'}), 401
+        
+        users = load_users()
+        user = users.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        subscription_active, subscription_end, subscription_type = check_user_subscription(user_id)
+        
+        return jsonify({
+            'user': {
+                'id': user['google_id'],
+                'name': user['name'],
+                'email': user['email'],
+                'picture': user['picture'],
+                'transcription_count': user['transcription_count'],
+                'subscription_active': subscription_active,
+                'subscription_end': subscription_end.isoformat() if subscription_end else None,
+                'subscription_type': subscription_type,
+                'has_used_free_transcription': user.get('has_used_free_transcription', False)
+            }
+        })
+        
+    except Exception as e:
+        print(f"Error getting user status: {e}")
+        return jsonify({'error': 'Failed to get user status'}), 500
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -452,15 +638,30 @@ def upload_file():
     if not openai_client:
         return jsonify({'error': 'Service temporarily unavailable - OpenAI not configured'}), 503
     
-    # Check user subscription
-    user_id = get_user_identifier(request)
-    subscription_active, subscription_end = check_user_subscription(user_id)
+    # Get authenticated user
+    user_id = request.headers.get('X-User-ID')
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     
-    # If not subscribed, check for payment
+    users = load_users()
+    user = users.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Check user subscription or free transcription availability
+    subscription_active, subscription_end, subscription_type = check_user_subscription(user_id)
+    
+    # If not subscribed and no free transcription available, check for payment
     if not subscription_active:
         payment_intent_id = request.form.get('payment_intent_id')
         if not payment_intent_id:
-            return jsonify({'error': 'Monthly subscription required ($1.99/month for unlimited transcriptions)'}), 402
+            return jsonify({
+                'error': 'Monthly subscription required ($1.99/month for unlimited transcriptions)',
+                'user_status': {
+                    'has_used_free_transcription': user.get('has_used_free_transcription', False),
+                    'transcription_count': user.get('transcription_count', 0)
+                }
+            }), 402
         
         # Verify payment was successful and activate subscription
         try:
@@ -471,6 +672,7 @@ def upload_file():
             # Activate subscription for 30 days
             subscription_end = activate_user_subscription(user_id, payment_intent_id)
             subscription_active = True
+            subscription_type = 'subscription'
             
         except Exception as e:
             return jsonify({'error': 'Invalid payment'}), 402
@@ -483,8 +685,9 @@ def upload_file():
         return jsonify({'error': 'No file selected'}), 400
     
     if file:
-        # Increment usage count for analytics
-        usage_count = increment_user_usage(user_id)
+        # Increment transcription count
+        is_free_transcription = (subscription_type == 'free')
+        transcription_count = increment_user_transcription_count(user_id, is_free_transcription)
         
         job_id = str(uuid.uuid4())
         filename = secure_filename(file.filename)
@@ -497,8 +700,10 @@ def upload_file():
             'progress': 0,
             'filename': filename,
             'user_id': user_id,
-            'usage_count': usage_count,
-            'subscription_active': subscription_active
+            'transcription_count': transcription_count,
+            'subscription_active': subscription_active,
+            'subscription_type': subscription_type,
+            'is_free_transcription': is_free_transcription
         }
         
         # Start optimized transcription in background
@@ -509,9 +714,13 @@ def upload_file():
         
         return jsonify({
             'job_id': job_id,
-            'usage_count': usage_count,
-            'subscription_active': subscription_active,
-            'subscription_end': subscription_end.isoformat() if subscription_end else None
+            'user': {
+                'transcription_count': transcription_count,
+                'subscription_active': subscription_active,
+                'subscription_end': subscription_end.isoformat() if subscription_end else None,
+                'subscription_type': subscription_type,
+                'has_used_free_transcription': user.get('has_used_free_transcription', False) or is_free_transcription
+            }
         })
 
 @app.route('/status/<job_id>')

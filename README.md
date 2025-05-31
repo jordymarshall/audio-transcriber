@@ -1,13 +1,14 @@
-# 🎵 Audio Transcription Service - Monthly Subscription
+# 🎵 Audio Transcription Service - Free First Transcription + $1.99/Month
 
-A modern, high-performance audio transcription service with React TypeScript frontend and Flask backend, featuring Stripe-powered monthly subscriptions. **No API keys required from users - everything is handled for you!**
+A modern, high-performance audio transcription service with **Google OAuth authentication**, featuring **free first transcription** and then $1.99/month for unlimited transcriptions. Built with React TypeScript frontend and Flask backend.
 
 ## ✨ Features
 
-- **💎 Monthly Subscription**: Just $1.99/month for unlimited transcriptions
-- **🔐 No API Keys Needed**: We handle all the AI processing for you
-- **🚀 Maximum Speed Processing**: Using latest GPT-4o-mini transcription model
-- **📱 Modern UI**: Beautiful React TypeScript frontend with drag & drop
+- **🎁 Free First Transcription**: Try our service completely free with your first transcription
+- **🔐 Google OAuth Login**: Simple, secure signup with your Google account
+- **💎 $1.99/Month Subscription**: Unlimited transcriptions after your free trial
+- **🚀 Maximum Speed Processing**: Using latest GPT-4o-mini transcription model (~$0.16/hour)
+- **📱 Modern UI**: Beautiful React TypeScript frontend with Google authentication
 - **📊 Real-time Progress**: Live progress tracking with detailed status updates
 - **🎯 Optimized Performance**: Multi-threaded compression and parallel API calls
 - **📁 Large File Support**: Handle files up to 500MB and 11+ hours long
@@ -18,6 +19,7 @@ A modern, high-performance audio transcription service with React TypeScript fro
 
 ### Frontend
 - React 18 with TypeScript
+- Google OAuth (@react-oauth/google)
 - Tailwind CSS for styling
 - Stripe Elements for payments
 - Axios for API communication
@@ -25,11 +27,12 @@ A modern, high-performance audio transcription service with React TypeScript fro
 
 ### Backend
 - Flask with Python
+- Google OAuth 2.0 authentication
 - OpenAI gpt-4o-mini-transcribe (cheapest model at ~$0.16/hour)
 - ffmpeg for audio processing
 - Multi-threaded parallel processing
 - Stripe for payment processing
-- MongoDB for user management
+- User management with JSON storage
 
 ## 📦 Installation
 
@@ -37,6 +40,7 @@ A modern, high-performance audio transcription service with React TypeScript fro
 - Python 3.8+
 - Node.js 16+
 - ffmpeg
+- Google Cloud account (for OAuth)
 - Stripe account (for payment processing)
 - OpenAI API key (for the developer)
 
@@ -47,17 +51,38 @@ A modern, high-performance audio transcription service with React TypeScript fro
 # OpenAI Configuration
 OPENAI_API_KEY=your-openai-api-key-here
 
-# Stripe Configuration  
-STRIPE_SECRET_KEY=your-stripe-secret-key
-STRIPE_PUBLISHABLE_KEY=your-stripe-publishable-key
+# Google OAuth Configuration  
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+
+# Stripe Configuration
+STRIPE_SECRET_KEY=sk_test_your-stripe-secret-key
+STRIPE_PUBLISHABLE_KEY=pk_test_your-stripe-publishable-key
+
+# Optional: Port configuration (default: 8001)
+PORT=8001
 ```
 
-2. **Install Python dependencies**:
+2. **Set up Google OAuth**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing one
+   - Enable Google+ API
+   - Go to "Credentials" → "Create Credentials" → "OAuth client ID"
+   - Choose "Web application"
+   - Add authorized origins: `http://localhost:3000`, `http://localhost:8001`
+   - Add redirect URIs: `http://localhost:3000`, `http://localhost:8001`
+   - Copy the Client ID to your `.env` file
+
+3. **Set up Stripe**:
+   - Create account at [stripe.com](https://stripe.com)
+   - Get your test API keys from the dashboard
+   - Add them to your `.env` file
+
+4. **Install Python dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Install ffmpeg** (if not already installed):
+5. **Install ffmpeg** (if not already installed):
 ```bash
 # macOS
 brew install ffmpeg
@@ -69,7 +94,7 @@ sudo apt update && sudo apt install ffmpeg
 # Download from https://ffmpeg.org/download.html
 ```
 
-4. **Start the Flask backend**:
+6. **Start the Flask backend**:
 ```bash
 python app_secure.py
 ```
@@ -96,15 +121,14 @@ Frontend will run on `http://localhost:3000`
 ## 🚀 Usage
 
 1. **Open your browser** to `http://localhost:3000`
-2. **Upload an audio file** by:
-   - Dragging and dropping onto the upload area
-   - Clicking to browse and select a file
-3. **Subscribe if needed**: First-time users will be prompted to subscribe for $1.99/month
+2. **Sign up with Google**: Click "Sign up with Google" for instant account creation
+3. **Upload your first file FREE**: Drag and drop or select an audio file
 4. **Watch real-time progress** through:
    - File compression (for files > 25MB)
    - Audio chunking (adaptive based on file size)
    - Parallel transcription
 5. **Download your transcription** when complete
+6. **Subscribe for more**: After your free transcription, subscribe for $1.99/month for unlimited access
 
 ## ⚡ Performance & Cost Optimization
 
@@ -112,6 +136,12 @@ Frontend will run on `http://localhost:3000`
 - **Cost**: ~$0.16 per hour of audio (80% cheaper than whisper-1)
 - **Quality**: Excellent transcription quality
 - **Speed**: Fast processing with parallel chunks
+
+### Free First Transcription + Subscription Model
+- **First transcription**: Completely FREE for all new users
+- **After free trial**: $1.99/month for unlimited transcriptions
+- **All inclusive**: We handle all API costs
+- **Cancel anytime**: No long-term commitment
 
 ### Adaptive Processing Strategy
 - **Small files (< 25MB)**: Direct transcription without compression
@@ -123,18 +153,20 @@ Frontend will run on `http://localhost:3000`
 - **Medium files** (25-100MB): 3-5 minutes  
 - **Large files** (100MB-500MB): 5-15 minutes
 
-## 💰 Pricing Model
+## 👤 User Authentication Flow
 
-- **Monthly Subscription**: $1.99/month
-- **Unlimited Transcriptions**: No per-file or per-minute charges
-- **All Inclusive**: We handle all API costs
-- **Cancel Anytime**: No long-term commitment
+1. **Google OAuth Signup**: Users sign up instantly with Google account
+2. **Free First Transcription**: New users get one free transcription
+3. **Subscription Prompt**: After free transcription, users are prompted to subscribe
+4. **Monthly Billing**: $1.99/month charged via Stripe for unlimited access
+5. **User Dashboard**: Track transcription count and subscription status
 
 ## 📁 Project Structure
 
 ```
-├── app_secure.py         # Flask backend server
+├── app_secure.py         # Flask backend server with Google OAuth
 ├── .env                  # API keys (create this file)
+├── users.json           # User data storage (auto-created)
 ├── requirements.txt      # Python dependencies
 ├── frontend/
 │   ├── package.json      # Node.js dependencies
@@ -142,26 +174,33 @@ Frontend will run on `http://localhost:3000`
 │   ├── tsconfig.json     # TypeScript configuration
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── FileUpload.tsx      # Drag & drop upload
+│   │   │   ├── FileUpload.tsx      # Authenticated file upload
+│   │   │   ├── LoginPage.tsx       # Google OAuth login
+│   │   │   ├── MainApp.tsx         # Main authenticated app
 │   │   │   ├── PaymentForm.tsx     # Stripe payment form
-│   │   │   └── ProgressTracker.tsx # Real-time progress
+│   │   │   ├── ProgressTracker.tsx # Real-time progress
+│   │   │   └── UserProfile.tsx     # User info & logout
+│   │   ├── contexts/
+│   │   │   └── AuthContext.tsx     # Authentication state management
 │   │   ├── types.ts      # TypeScript interfaces
-│   │   ├── App.tsx       # Main React component
+│   │   ├── App.tsx       # Main React component with auth routing
 │   │   ├── index.tsx     # React entry point
 │   │   └── index.css     # Tailwind styles
 │   └── public/
 │       └── index.html    # HTML template
 ├── uploads/              # Temporary uploaded files
 ├── outputs/              # Generated transcriptions
-└── usage_tracking.json   # User subscription data
+└── users.json           # User accounts and subscription data
 ```
 
 ## 🔐 Security Features
 
+- **Google OAuth 2.0**: Industry-standard authentication
 - **No user API keys**: All AI processing handled server-side
 - **Secure payments**: Stripe handles all payment data
 - **File cleanup**: Uploaded files deleted after processing
 - **Environment variables**: Sensitive keys stored in `.env`
+- **User data protection**: Minimal data collection and secure storage
 - **HTTPS ready**: Designed for secure deployment
 
 ## 🔧 Configuration
@@ -173,22 +212,33 @@ Frontend will run on `http://localhost:3000`
 - **Parallel Workers**: 5-20 (based on file size)
 - **File Size Limit**: 500MB per file
 
-### Stripe Settings
-- **Price**: $1.99/month
+### Authentication Settings
+- **Google OAuth**: Required for all users
+- **Session Management**: JWT-based authentication
+- **User Storage**: JSON file (easily upgradeable to database)
+
+### Pricing Settings
+- **Free Trial**: First transcription free for new users
+- **Monthly Price**: $1.99/month
 - **Currency**: USD
-- **Billing**: Monthly recurring
+- **Billing**: Monthly recurring via Stripe
 
 ## 🐛 Troubleshooting
 
 ### Common Issues
 
+**"Google OAuth is not properly configured"**
+- Check that `GOOGLE_CLIENT_ID` is set in `.env`
+- Verify the Client ID is correct from Google Cloud Console
+- Ensure authorized origins include your localhost URLs
+
 **"Service temporarily unavailable"**
 - Check that `OPENAI_API_KEY` is set in `.env`
-- Verify the API key is valid
+- Verify the API key is valid and has credits
 
-**"ffmpeg not found"**
-- Make sure ffmpeg is installed and in your PATH
-- On macOS: `brew install ffmpeg`
+**"Authentication required"**
+- Make sure you're signed in with Google
+- Try refreshing the page or logging out and back in
 
 **"Upload failed"**
 - Check file size (max 500MB)
@@ -198,10 +248,17 @@ Frontend will run on `http://localhost:3000`
 **Payment issues**
 - Verify Stripe keys in `.env`
 - Check Stripe dashboard for webhook configuration
+- Ensure you're using test mode for development
 
 ## 🚀 Deployment
 
 See `DEPLOYMENT.md` for detailed deployment instructions on platforms like Railway, Render, or Google Cloud Run.
+
+**Important for deployment:**
+- Set production URLs in Google OAuth settings
+- Use production Stripe keys
+- Set environment variables on your hosting platform
+- Ensure HTTPS for OAuth callbacks
 
 ## 📊 Supported Audio Formats
 
@@ -236,10 +293,22 @@ MIT License - feel free to use and modify as needed.
 If you're deploying this service:
 
 1. Get an OpenAI API key from https://platform.openai.com
-2. Create a Stripe account at https://stripe.com
-3. Set up your `.env` file with all required keys
-4. Consider using Railway or Render for easy deployment
+2. Set up Google OAuth in Google Cloud Console
+3. Create a Stripe account at https://stripe.com
+4. Set up your `.env` file with all required keys
+5. Consider using Railway or Render for easy deployment
 
 ---
 
-**Happy transcribing!** 🎉 Built with ❤️ by [Jordan Marshall](https://www.linkedin.com/in/jordanmarshalluwo/) 
+**Happy transcribing!** 🎉 Built with ❤️ by [Jordan Marshall](https://www.linkedin.com/in/jordanmarshalluwo/)
+
+## 🎁 Special Feature: Free First Transcription
+
+Every new user gets their **first transcription completely FREE** - no credit card required for signup! This allows users to:
+
+- ✅ Test the quality of our AI transcription
+- ✅ Experience the fast processing speeds  
+- ✅ See the user-friendly interface
+- ✅ Try before committing to a subscription
+
+After the free transcription, users can subscribe for just $1.99/month for unlimited access! 

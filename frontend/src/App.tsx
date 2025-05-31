@@ -1,67 +1,85 @@
 import React, { useState, useEffect } from 'react';
-import { Elements } from '@stripe/react-stripe-js';
-import { loadStripe } from '@stripe/stripe-js';
-import axios from 'axios';
-import FileUpload from './components/FileUpload';
-import ProgressTracker from './components/ProgressTracker';
-import { TranscriptionJob } from './types';
-import './index.css';
+import { GoogleOAuthProvider } from '@react-oauth/google';
+import AuthProvider from './contexts/AuthContext';
+import LoginPage from './components/LoginPage';
+import MainApp from './components/MainApp';
+import { User } from './types';
+import './App.css';
 
 function App() {
-  const [currentJob, setCurrentJob] = useState<TranscriptionJob | null>(null);
-  const [stripePromise, setStripePromise] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [googleClientId, setGoogleClientId] = useState<string>('');
 
   useEffect(() => {
-    // Load Stripe configuration
-    const loadStripeConfig = async () => {
+    // Fetch Google Client ID from backend
+    const fetchConfig = async () => {
       try {
-        const response = await axios.get('/api/config');
-        const stripe = await loadStripe(response.data.publishable_key);
-        setStripePromise(stripe);
+        const response = await fetch('/api/config');
+        const config = await response.json();
+        setGoogleClientId(config.google_client_id);
       } catch (error) {
-        console.error('Failed to load Stripe configuration:', error);
+        console.error('Failed to fetch config:', error);
       }
     };
 
-    loadStripeConfig();
+    fetchConfig();
+
+    // Check if user is already logged in (from localStorage)
+    const savedUser = localStorage.getItem('user');
+    if (savedUser) {
+      try {
+        const parsedUser = JSON.parse(savedUser);
+        setUser(parsedUser);
+      } catch (error) {
+        localStorage.removeItem('user');
+      }
+    }
+    setLoading(false);
   }, []);
 
-  const handleJobStart = (jobId: string, filename: string) => {
-    setCurrentJob({
-      job_id: jobId,
-      filename,
-      status: 'uploaded',
-      progress: 0,
-    });
+  const handleLogin = (userData: User) => {
+    setUser(userData);
+    localStorage.setItem('user', JSON.stringify(userData));
   };
 
-  const handleJobComplete = () => {
-    setCurrentJob(null);
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('user');
+    localStorage.removeItem('google_token');
   };
 
-  if (!stripePromise) {
+  if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (!googleClientId) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading payment system...</p>
+          <h2 className="text-xl font-semibold text-red-600 mb-2">Configuration Error</h2>
+          <p className="text-gray-600">Google OAuth is not properly configured.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <Elements stripe={stripePromise}>
-      <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-4xl mx-auto">
-          {!currentJob ? (
-            <FileUpload onJobStart={handleJobStart} />
+    <GoogleOAuthProvider clientId={googleClientId}>
+      <AuthProvider>
+        <div className="App">
+          {user ? (
+            <MainApp user={user} onLogout={handleLogout} />
           ) : (
-            <ProgressTracker job={currentJob} onComplete={handleJobComplete} />
+            <LoginPage onLogin={handleLogin} />
           )}
         </div>
-      </div>
-    </Elements>
+      </AuthProvider>
+    </GoogleOAuthProvider>
   );
 }
 
